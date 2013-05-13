@@ -45,16 +45,17 @@ public class Supervisor implements Runnable {
         try {
             try {
                 statusUpdater.updateStatus("Kill existing manager process");
-                statusUpdater.appendLog("try to kill manager process before relaunch");
+                statusUpdater.appendLog("try to kill manager process before launch");
                 ManagerProcess.kill();
             } catch (Exception e) {
-                Log.e("fqrouter", "failed to kill manager process before relaunch", e);
-                statusUpdater.appendLog("failed to kill manager process before relaunch");
+                Log.e("fqrouter", "failed to kill manager process before launch", e);
+                statusUpdater.appendLog("failed to kill manager process before launch");
             }
             if (!deployer.deploy()) {
+                statusUpdater.reportError("failed to deploy", null);
                 return;
             }
-            boolean shouldWait = launchManager(deployer);
+            boolean shouldWait = launchManager();
             if (shouldWait && !waitForManager()) {
                 return;
             }
@@ -66,7 +67,7 @@ public class Supervisor implements Runnable {
         }
     }
 
-    private boolean launchManager(Deployer deployer) {
+    private boolean launchManager() {
         if (ping()) {
             statusUpdater.appendLog("manager is already running");
             return false;

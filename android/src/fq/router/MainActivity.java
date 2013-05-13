@@ -62,6 +62,30 @@ public class MainActivity extends Activity implements StatusUpdater {
         }).start();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!started) {
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (!Supervisor.ping()) {
+                    updateStatus("Manage process died, restart");
+                    try {
+                        updateStatus("Kill existing manager process");
+                        ManagerProcess.kill();
+                    } catch (Exception e) {
+                        Log.e("fqrouter", "failed to kill manager process before relaunch", e);
+                        appendLog("failed to kill manager process before relaunch");
+                    }
+                    new Thread(new Launcher(MainActivity.this)).start();
+                }
+            }
+        }).start();
+    }
+
     private boolean shouldStart() {
         if (!EXITING_FLAG.exists()) {
             appendLog("exiting flag not found");
@@ -75,7 +99,12 @@ public class MainActivity extends Activity implements StatusUpdater {
             return true;
         }
         if (ManagerProcess.exists()) {
-            appendLog("exiting flag and manager process found");
+            updateStatus("Another instance is still running, exit in 3 seconds");
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                // ignore
+            }
             return false;
         }
         appendLog("exiting flag found and ignored due to manager process missing");
@@ -91,10 +120,18 @@ public class MainActivity extends Activity implements StatusUpdater {
             @Override
             public void onClick(View view) {
                 final boolean checked = wifiHotspotToggleButton.isChecked();
-                findViewById(R.id.wifiHotspotPanel).setVisibility(View.INVISIBLE);
                 applyWifiHotspotIsStarted(checked);
             }
         });
+    }
+
+    public void hideWifiHotspotToggleButton() {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                findViewById(R.id.wifiHotspotPanel).setVisibility(View.INVISIBLE);
+            }
+        }, 0);
     }
 
     private void applyWifiHotspotIsStarted(final boolean isStarted) {
@@ -113,14 +150,9 @@ public class MainActivity extends Activity implements StatusUpdater {
     private void startWifiHotspot() {
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
         String mode = preferences.getString("WifiHotspotMode", WifiHotspot.MODE_WIFI_REPEATER);
-        boolean wasConnected = wifiHotspot.isConnected();
         boolean started = wifiHotspot.start(mode);
         if (!started && WifiHotspot.MODE_WIFI_REPEATER.equals(mode)) {
-            if (wasConnected) {
-                askIfStartTraditionalWifiHotspot();
-            } else {
-                wifiHotspot.start(WifiHotspot.MODE_TRADITIONAL_WIFI_HOTSPOT);
-            }
+            askIfStartTraditionalWifiHotspot();
         }
     }
 
@@ -131,8 +163,11 @@ public class MainActivity extends Activity implements StatusUpdater {
                 new AlertDialog.Builder(MainActivity.this)
                         .setIcon(android.R.drawable.ic_dialog_alert)
                         .setTitle("Failed to start wifi repeater")
-                        .setMessage("Do you want to start wifi hotspot sharing 3G connection? " +
-                                "It will consume your 3G data traffic volume.")
+                        .setMessage("Do you want to start traditional wifi hotspot sharing 3G connection? " +
+                                "It will consume your 3G data traffic volume. " +
+                                "Or you can try 'Pick & Play' from the menu, " +
+                                "it can share free internet to devices in your current wifi network")
+
                         .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
 
                             @Override
@@ -146,7 +181,7 @@ public class MainActivity extends Activity implements StatusUpdater {
                             }
 
                         })
-                        .setNegativeButton("No", null)
+                        .setNegativeButton("No, thanks", null)
                         .show();
             }
         }, 2000);
@@ -216,16 +251,10 @@ public class MainActivity extends Activity implements StatusUpdater {
             Log.e("fqrouter", "failed to create .exit flag", e);
         }
         EXITING_FLAG.setLastModified(System.currentTimeMillis());
-        try {
-            Intent intent = new Intent(Intent.ACTION_MAIN);
-            intent.addCategory(Intent.CATEGORY_HOME);
-            startActivity(intent);
-        } catch (Exception e) {
-            Log.e("fqrouter", "failed to go back home screen", e);
-        }
         new Thread(new Runnable() {
             @Override
             public void run() {
+                updateStatus("About to exit", false);
                 if (started && WifiHotspot.isStarted()) {
                     wifiHotspot.stop();
                 }
@@ -240,10 +269,10 @@ public class MainActivity extends Activity implements StatusUpdater {
                     @Override
                     public void run() {
                         clearNotification();
+                        finish();
                     }
 
                 }, 0);
-                finish();
             }
         }).start();
     }

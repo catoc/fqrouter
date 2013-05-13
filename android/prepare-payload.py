@@ -18,14 +18,17 @@ DPKT_TAR_GZ_FILE = os.path.join(PAYLOAD_DIR, 'dpkt-1.7.tar.gz')
 DPKT_DIR = os.path.join(PAYLOAD_DIR, 'dpkt-1.7')
 DPKT_PACKAGE_DIR = os.path.join(DPKT_DIR, 'dpkt')
 BUSYBOX_FILE = os.path.join(ASSETS_DIR, 'busybox')
-CAPTURE_LOG_SH = os.path.join(ASSETS_DIR, 'capture-log.sh')
-CAPTURE_LOG_SH_SRC = os.path.join(SRC_DIR, 'capture-log.sh')
 PROXY_TOOLS_DIR = os.path.join(PAYLOAD_DIR, 'proxy-tools')
 REDSOCKS_FILE = os.path.join(PROXY_TOOLS_DIR, 'redsocks')
 REDSOCKS_FILE_SRC = os.path.join(ROOT_DIR, 'libs', 'armeabi', 'redsocks')
 PYNETFILTER_CONNTRACK_ZIP_FILE = os.path.join(PAYLOAD_DIR, 'pynetfilter_conntrack.zip')
 PYNETFILTER_CONNTRACK_DIR = os.path.join(PAYLOAD_DIR, 'pynetfilter_conntrack-android')
 PYNETFILTER_CONNTRACK_PACKAGE_DIR = os.path.join(PYNETFILTER_CONNTRACK_DIR, 'pynetfilter_conntrack')
+GREENLET_FILE = os.path.join(PAYLOAD_DIR, 'python', 'lib', 'python2.7', 'lib-dynload', 'greenlet.so')
+GEVENT_ZIP_FILE = os.path.join(PAYLOAD_DIR, 'gevent.zip')
+GEVENT_DIR = os.path.join(PAYLOAD_DIR, 'gevent')
+FQDNS_PY = os.path.join(PAYLOAD_DIR, 'python', 'lib', 'python2.7', 'site-packages', 'fqdns.py')
+FQDNS_PY_SRC = os.path.join(os.path.dirname(__file__), '..', '..', 'fqdns', 'fqdns.py')
 CONNTRACK_FILE = os.path.join(PROXY_TOOLS_DIR, 'conntrack')
 MANAGER_DIR = os.path.join(ROOT_DIR, '../manager')
 
@@ -48,7 +51,10 @@ def main():
     download_conntrack()
     download_pynetfilter_conntrack()
     unzip_pynetfilter_conntrack()
-    copy_capture_log_sh()
+    download_greenlet()
+    download_gevent()
+    unzip_gevent()
+    copy_fqdns()
     zip_payload()
 
 
@@ -113,10 +119,6 @@ def download_conntrack():
     urllib.urlretrieve('http://cdn.fqrouter.com/android-utils/conntrack', CONNTRACK_FILE)
 
 
-def copy_capture_log_sh():
-    subprocess.check_call('cp %s %s' % (CAPTURE_LOG_SH_SRC, CAPTURE_LOG_SH), shell=True)
-
-
 def download_pynetfilter_conntrack():
     if os.path.exists(PYNETFILTER_CONNTRACK_ZIP_FILE):
         return
@@ -131,6 +133,35 @@ def unzip_pynetfilter_conntrack():
     if not os.path.exists(os.path.join(PYNETFILTER_CONNTRACK_DIR, 'setup.py')):
         print('zip file not as expected')
         sys.exit(1)
+
+
+def download_greenlet():
+    # thanks @ofmax (madeye)
+    # source https://github.com/madeye/gaeproxy/blob/master/assets/modules/python.mp3
+    if os.path.exists(GREENLET_FILE):
+        return
+    urllib.urlretrieve('http://cdn.fqrouter.com/android-utils/greenlet.so', GREENLET_FILE)
+
+
+def download_gevent():
+    # thanks @ofmax (madeye)
+    # source https://github.com/madeye/gaeproxy/blob/master/assets/modules/python.mp3
+    if os.path.exists(GEVENT_ZIP_FILE):
+        return
+    urllib.urlretrieve('http://cdn.fqrouter.com/android-utils/gevent.zip', GEVENT_ZIP_FILE)
+
+
+def unzip_gevent():
+    if os.path.exists(GEVENT_DIR):
+        return
+    subprocess.check_call('unzip %s' % GEVENT_ZIP_FILE, cwd=PAYLOAD_DIR, shell=True)
+    if not os.path.exists(os.path.join(GEVENT_DIR, 'gevent.pyc')):
+        print('zip file not as expected')
+        sys.exit(1)
+
+
+def copy_fqdns():
+    subprocess.check_call('cp %s %s' % (FQDNS_PY_SRC, FQDNS_PY), shell=True)
 
 
 def zip_payload():
@@ -153,6 +184,8 @@ def zip_payload():
     include_directory(PROXY_TOOLS_DIR, PAYLOAD_DIR)
     include_directory(MANAGER_DIR, os.path.dirname(MANAGER_DIR))
     include_directory(PYNETFILTER_CONNTRACK_PACKAGE_DIR, PYNETFILTER_CONNTRACK_DIR,
+                      'python/lib/python2.7/site-packages')
+    include_directory(GEVENT_DIR, PAYLOAD_DIR,
                       'python/lib/python2.7/site-packages')
     include_directory(DPKT_PACKAGE_DIR, DPKT_DIR, 'python/lib/python2.7/site-packages')
 

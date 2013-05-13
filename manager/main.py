@@ -1,23 +1,23 @@
 import os
 import logging
 import logging.handlers
+import sys
+
 import lan_service
+
 
 ROOT_DIR = os.path.dirname(__file__)
 LOG_DIR = '/data/data/fq.router'
 LOG_FILE = os.path.join(LOG_DIR, 'manager.log')
 
 
-def setup_logging():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+def setup_logging(log_file=LOG_FILE, maxBytes=1024 * 512):
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     handler = logging.handlers.RotatingFileHandler(
-        LOG_FILE, maxBytes=1024 * 1024, backupCount=1)
+        log_file, maxBytes=maxBytes, backupCount=0)
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logging.getLogger('fqrouter').addHandler(handler)
 
-
-if '__main__' == __name__:
-    setup_logging()
 
 LOGGER = logging.getLogger('fqrouter.%s' % __name__)
 
@@ -26,16 +26,19 @@ import wifi
 import version
 import cgi
 import wsgiref.simple_server
-from SocketServer import ThreadingMixIn
 import dns_service
 import tcp_service
 import full_proxy_service
-import sys
+import shutdown_hook
+import twitter
 
 
 def handle_ping(environ, start_response):
     start_response(httplib.OK, [('Content-Type', 'text/plain')])
-    yield 'PONG'
+    if not dns_service.is_alive():
+        yield 'DNS SERVICE DIED'
+    else:
+        yield 'PONG'
 
 
 def handle_logs(environ, start_response):
@@ -89,24 +92,49 @@ def get_http_response(code):
     return '%s %s' % (code, httplib.responses[code])
 
 
-class MultiThreadedWSGIServer(ThreadingMixIn, wsgiref.simple_server.WSGIServer):
-    pass
-
-
-if '__main__' == __name__:
+def run():
+    setup_logging(LOG_FILE)
     LOGGER.info('environment: %s' % os.environ.items())
+    wifi.setup_lo_alias()
     dns_service.run()
     tcp_service.run()
     full_proxy_service.run()
     lan_service.run()
-    wifi.setup_lo_alias()
     LOGGER.info('services started')
     try:
         httpd = wsgiref.simple_server.make_server(
-            '127.0.0.1', 8318, handle_request,
-            server_class=MultiThreadedWSGIServer)
+            '127.0.0.1', 8318, handle_request)
         LOGGER.info('serving HTTP on port 8318...')
     except:
         LOGGER.exception('failed to start HTTP server on port 8318')
         sys.exit(1)
     httpd.serve_forever()
+
+
+def clean():
+    setup_logging(LOG_FILE)
+    LOGGER.info('clean...')
+    dns_service.clean()
+    tcp_service.clean()
+    full_proxy_service.clean()
+    lan_service.clean()
+    wifi.clean()
+
+
+if '__main__' == __name__:
+    if len(sys.argv) > 1:
+        shutdown_hook.shutdown_hooks = []
+        action = sys.argv[1]
+        if 'wifi-start-hotspot' == action:
+            setup_logging(os.path.join(LOG_DIR, 'wifi.log'), maxBytes=1024 * 512)
+            sys.stderr.write(repr(wifi.start_hotspot(*sys.argv[2:])))
+        elif 'wifi-stop-hotspot' == action:
+            setup_logging(os.path.join(LOG_DIR, 'wifi.log'), maxBytes=1024 * 512)
+            sys.stderr.write(repr(wifi.stop_hotspot()))
+        elif 'twitter-check' == action:
+            setup_logging(os.path.join(LOG_DIR, 'twitter.log'), maxBytes=1024 * 64)
+            sys.stderr.write(repr(twitter.check()))
+        elif 'clean' == action:
+            clean()
+    else:
+        run()

@@ -17,7 +17,6 @@ public class Deployer {
     public static File PAYLOAD_CHECKSUM = new File(DATA_DIR, "payload.checksum");
     public static File PYTHON_DIR = new File(DATA_DIR, "python");
     public static File PYTHON_LAUNCHER = new File(PYTHON_DIR, "bin/python-launcher.sh");
-    public static File LINKER_FILE = new File(PYTHON_DIR, "bin/linker");
     public static File WIFI_TOOLS_DIR = new File(DATA_DIR, "wifi-tools");
     public static File PROXY_TOOLS_DIR = new File(DATA_DIR, "proxy-tools");
     public static File MANAGER_DIR = new File(DATA_DIR, "manager");
@@ -46,7 +45,7 @@ public class Deployer {
         }
         boolean foundPayloadUpdate;
         try {
-            foundPayloadUpdate = checkUpdate();
+            foundPayloadUpdate = shouldDeployPayload();
         } catch (Exception e) {
             statusUpdater.reportError("failed to check update", e);
             return false;
@@ -81,13 +80,6 @@ public class Deployer {
             return false;
         }
         try {
-            selectLinker();
-            linkFile(new File("/data/data/fq.router/python/lib"), new File("/data/data/fq.router/lib"));
-        } catch (Exception e) {
-            statusUpdater.reportError("failed to select linker", e);
-            return false;
-        }
-        try {
             makePayloadExecutable();
         } catch (Exception e) {
             statusUpdater.reportError("failed to make payload executable", e);
@@ -99,14 +91,13 @@ public class Deployer {
 
     private boolean isRooted() {
         try {
-            ShellUtils.execute(BUSYBOX_FILE.getCanonicalPath(), "which", "su");
-            return true;
+            return ShellUtils.sudo("echo", "hello").contains("hello");
         } catch (Exception e) {
             return false;
         }
     }
 
-    private boolean checkUpdate() throws Exception {
+    private boolean shouldDeployPayload() throws Exception {
         if (!PAYLOAD_CHECKSUM.exists()) {
             statusUpdater.appendLog("no checksum, assume it is old");
             return true;
@@ -210,12 +201,11 @@ public class Deployer {
             statusUpdater.appendLog("failed to delete payload.zip after unzip");
         }
         statusUpdater.appendLog("successfully unzipped payload.zip");
-        Thread.sleep(1000); // wait for the files written out
-    }
-
-    private void selectLinker() throws Exception {
-        if (!LINKER_FILE.exists()) {
-            linkFile(new File("/system/bin/linker"), LINKER_FILE);
+        for (int i = 0; i < 5; i++) {
+            Thread.sleep(1000); // wait for the files written out
+            if (MANAGER_MAIN_PY.exists()) {
+                break;
+            }
         }
     }
 
@@ -254,20 +244,6 @@ public class Deployer {
             statusUpdater.appendLog("successfully made " + file.getName() + " executable");
         } else {
             statusUpdater.appendLog("failed to make " + file.getName() + " executable");
-        }
-    }
-
-    private static void linkFile(File src, File dst) throws Exception {
-        if (dst.exists()) {
-            if (dst.getCanonicalPath().equals(src.getCanonicalPath())) {
-                return;
-            }
-            dst.delete();
-        }
-        try {
-            ShellUtils.sudo(BUSYBOX_FILE.getAbsolutePath(), "ln", "-s", src.getAbsolutePath(), dst.getAbsolutePath());
-        } catch (Exception e) {
-            Log.e("fqrouter", "failed to link " + src.getName(), e);
         }
     }
 }

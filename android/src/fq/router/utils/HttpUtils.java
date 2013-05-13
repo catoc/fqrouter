@@ -24,6 +24,7 @@ public class HttpUtils {
             connection.setRequestProperty("charset", "utf-8");
             connection.setRequestProperty("Content-Length", "" + Integer.toString(body.getBytes().length));
             connection.setUseCaches(false);
+            connection.setConnectTimeout(60000);
             connection.setReadTimeout(60000);
             DataOutputStream wr = new DataOutputStream(connection.getOutputStream());
             try {
@@ -32,17 +33,12 @@ public class HttpUtils {
             } finally {
                 wr.close();
             }
-            int responseCode = connection.getResponseCode();
-            String output = IOUtils.readAll(connection.getInputStream());
-            if (responseCode >= 200 && responseCode < 300) {
-                return output;
-            } else {
-                throw new Error(responseCode, output);
-            }
+            return handleResponse(connection, null);
         } finally {
             connection.disconnect();
         }
     }
+
 
     public static String get(String request) throws Exception {
         return get(request, null, 3000);
@@ -56,17 +52,21 @@ public class HttpUtils {
             connection.setRequestMethod("GET");
             connection.setUseCaches(false);
             if (timeout > 0) {
+                connection.setConnectTimeout(timeout);
                 connection.setReadTimeout(timeout);
             }
-            int responseCode = connection.getResponseCode();
-            String output = IOUtils.readAll(connection.getInputStream(), callback);
-            if (responseCode >= 200 && responseCode < 300) {
-                return output;
-            } else {
-                throw new Error(responseCode, output);
-            }
+            return handleResponse(connection, callback);
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private static String handleResponse(HttpURLConnection connection, IOUtils.Callback callback) throws Exception {
+        int responseCode = connection.getResponseCode();
+        if (responseCode >= 200 && responseCode < 300) {
+            return IOUtils.readAll(connection.getInputStream(), callback);
+        } else {
+            throw new Error(responseCode, IOUtils.readAll(connection.getErrorStream(), callback));
         }
     }
 
@@ -77,6 +77,14 @@ public class HttpUtils {
         public Error(int responseCode, String output) {
             this.responseCode = responseCode;
             this.output = output;
+        }
+
+        @Override
+        public String toString() {
+            return "Error{" +
+                    "responseCode=" + responseCode +
+                    ", output='" + output + '\'' +
+                    '}';
         }
     }
 }

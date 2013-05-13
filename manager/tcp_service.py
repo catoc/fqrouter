@@ -10,7 +10,7 @@ import iptables
 import pending_connection
 import shutdown_hook
 import china_ip
-import dns_resolver
+import dns_service
 import full_proxy_service
 import lan_ip
 
@@ -132,6 +132,8 @@ def handle_nfqueue():
     except:
         LOGGER.exception('stopped handling nfqueue')
         tcp_service_status.error = traceback.format_exc()
+    finally:
+        LOGGER.info('tcp service stopped')
 
 
 def handle_packet(nfqueue_element):
@@ -253,7 +255,7 @@ def handle_syn_ack(syn_ack):
 
 
 def log_jamming_event(ip, event):
-    event = '%s: %s %s' % (dns_resolver.get_domain(ip) or 'unknown.com', ip, event)
+    event = '%s: %s %s' % (dns_service.get_domain(ip) or 'unknown.com', ip, event)
     LOGGER.error('jamming event: %s' % event)
 
 
@@ -278,6 +280,9 @@ def inject_ping_requests_to_find_right_ttl(dst):
 
 
 def handle_time_exceeded(ip_packet):
+    global MAX_TTL_TO_GFW
+    global MIN_TTL_TO_GFW
+    global RANGE_OF_TTL_TO_GFW
     time_exceed = ip_packet.icmp.data
     if not isinstance(time_exceed.data, dpkt.ip.IP):
         return
@@ -302,6 +307,11 @@ def handle_time_exceeded(ip_packet):
         ttl_to_gfw = pending_connection.get_ttl_to_gfw(dst_ip)
         if ttl_to_gfw:
             LOGGER.info('found ttl to gfw: %s %s' % (dst_ip, ttl_to_gfw - SAFETY_DELTA))
+            if ttl_to_gfw == MAX_TTL_TO_GFW:
+                MIN_TTL_TO_GFW += 2
+                MAX_TTL_TO_GFW += 2
+                LOGGER.info('slide ttl range to [%s ~ %s]' % (MIN_TTL_TO_GFW, MAX_TTL_TO_GFW))
+                RANGE_OF_TTL_TO_GFW = range(MIN_TTL_TO_GFW, MAX_TTL_TO_GFW + 1)
             add_international_ip(dst_ip, ttl_to_gfw - SAFETY_DELTA)
 
 

@@ -1,10 +1,10 @@
 import logging
-import thread
 from netfilterqueue import NetfilterQueue
 import socket
 import time
 import urllib2
 import threading
+import thread
 import struct
 import subprocess
 
@@ -21,11 +21,13 @@ import iptables
 import china_ip
 import redsocks_monitor
 import goagent_monitor
-import dns_resolver
+import dns_service
 import wifi
+import shell
 
 
 LOGGER = logging.getLogger('fqrouter.%s' % __name__)
+APPIDS_COUNT = 10
 
 
 def run():
@@ -63,6 +65,10 @@ pending_list = {} # ip => started_at
 proxies = {} # local_port => proxy
 proxies_refreshed_at = 0
 enabled = True
+previously_resolved_results = {
+    'appids': [],
+    'free_proxies': []
+}
 
 RULES = [
     (
@@ -99,28 +105,31 @@ def start_full_proxy():
 
 
 def refresh_proxies():
+    if redsocks_monitor.is_redsocks_live():
+        LOGGER.error('refresh proxies need to stop redsocks first')
+        return
     proxies.clear()
-    if redsocks_monitor.kill_redsocks():
-        LOGGER.info('existing redsocks killed')
-        time.sleep(2)
-    LOGGER.info('starting goagent')
-    try:
-        start_goagent()
-    except:
-        LOGGER.exception('failed to start goagent')
-        goagent_monitor.kill_goagent()
+    redsocks_monitor.kill_redsocks()
+    appids = resolve_appids()
+    if appids:
+        try:
+            start_goagent(appids)
+        except:
+            LOGGER.exception('failed to start goagent')
+            goagent_monitor.kill_goagent()
+    else:
+        LOGGER.info('no appids resolved, do not start goagent')
     LOGGER.info('resolving free proxies')
-    resolve_free_proxies()
+    for i, connection_info in enumerate(resolve_free_proxies()):
+        add_free_proxy(19830 + i, connection_info)
     LOGGER.info('starting redsocks')
-    try:
-        start_redsocks()
-    except:
-        LOGGER.exception('failed to start redsocks')
+    if not start_redsocks():
+        LOGGER.error('clear proxies, due to redsocks failed to start')
         proxies.clear()
-        redsocks_monitor.kill_redsocks()
         return False
     if proxies:
-        can_access_twitter()
+        LOGGER.info('checking twitter access')
+        LOGGER.info('twitter access success rate: %s' % shell.fqrouter_execute('twitter-check'))
     else:
         LOGGER.info('still no proxies after redsocks started, retry in 120 seconds')
         time.sleep(120)
@@ -128,11 +137,32 @@ def refresh_proxies():
     return True
 
 
-def start_goagent():
-    if goagent_monitor.kill_goagent():
-        time.sleep(2)
+def resolve_appids():
+    appids = []
+    for i in range(6):
+        try:
+            domain_names = ['goagent%s.fqrouter.com' % i for i in range(1, 1 + APPIDS_COUNT)]
+            answers = dns_service.resolve('TXT', domain_names)
+            for appid in answers.values():
+                appid = appid[0] if appid else ''
+                appid = ''.join(e for e in appid if e.isalnum())
+                if appid:
+                    appids.append(appid)
+            if answers and len(appids) >= (len(previously_resolved_results['appids']) / 2):
+                previously_resolved_results['appids'] = appids
+                return appids
+        except:
+            LOGGER.exception('failed to resolve appids once')
+        LOGGER.info('retry resolving appids in 10 seconds')
+        time.sleep(10)
+    LOGGER.error('resolve appids failed, too many retries, give up')
+    return previously_resolved_results['appids']
+
+
+def start_goagent(appids):
+    goagent_monitor.kill_goagent()
     goagent_monitor.on_goagent_died = on_goagent_died
-    goagent_monitor.start_goagent()
+    goagent_monitor.start_goagent(appids)
     proxies[19830 + PROXIES_COUNT + 1] = {
         'clients': set(),
         'rank': 0, # lower is better
@@ -153,14 +183,32 @@ def resolve_free_proxies():
     proxy_domain_names = {}
     for i in range(1, 1 + PROXIES_COUNT):
         proxy_domain_names[19830 + i] = 'proxy%s.fqrouter.com' % i
-    answers = dns_resolver.resolve(dpkt.dns.DNS_TXT, proxy_domain_names.values())
-    for i, connection_info in enumerate(answers.values()):
-        add_free_proxy(19830 + i, connection_info)
+    for i in range(6):
+        try:
+            answers = dns_service.resolve('TXT', proxy_domain_names.values())
+            if answers:
+                connection_infos = []
+                for connection_info in answers.values():
+                    connection_info = connection_info[0] if connection_info else ''
+                    if not connection_info:
+                        continue
+                    connection_info = ''.join(e for e in connection_info if e.isalnum() or e in [':', '.', '-'])
+                    connection_info = connection_info.split(':') # proxy_type:ip:port:username:password
+                    connection_infos.append(connection_info)
+                if len(connection_infos) > (len(previously_resolved_results['free_proxies']) / 2):
+                    previously_resolved_results['free_proxies'] = connection_infos
+                    return connection_infos
+                else:
+                    continue
+        except:
+            LOGGER.exception('failed to resolve free proxies once')
+        LOGGER.info('retry resolving free proxies in 10 seconds')
+        time.sleep(10)
+    LOGGER.error('resolve free proxies failed, too many retries, give up')
+    return previously_resolved_results['free_proxies']
 
 
 def add_free_proxy(local_port, connection_info):
-    connection_info = ''.join(e for e in connection_info if e.isalnum() or e in [':', '.', '-'])
-    connection_info = connection_info.split(':') # proxy_type:ip:port:username:password
     proxies[local_port] = {
         'clients': set(),
         'rank': 0, # lower is better
@@ -177,11 +225,12 @@ def start_redsocks():
     redsocks_monitor.update_proxy = update_proxy
     redsocks_monitor.refresh_proxies = refresh_proxies
     wifi.on_wifi_hotspot_started = redsocks_monitor.kill_redsocks
-    redsocks_monitor.start_redsocks(proxies)
+    return redsocks_monitor.start_redsocks(proxies)
 
 
 def update_proxy(local_port, **kwargs):
-    proxies[local_port].update(kwargs)
+    if local_port in proxies:
+        proxies[local_port].update(kwargs)
 
 
 def handle_proxy_error(local_port, proxy):
@@ -197,36 +246,6 @@ def handle_proxy_error(local_port, proxy):
         proxy['error_penalty'] *= 2
 
 
-def can_access_twitter():
-    checkers = []
-    for i in range(PROXIES_COUNT * 2):
-        checker = TwitterAccessChecker()
-        checker.daemon = True
-        checker.start()
-        checkers.append(checker)
-        time.sleep(0.5)
-    success_count = 0
-    for checker in checkers:
-        checker.join()
-        if checker.success:
-            success_count += 1
-    LOGGER.info('twitter access success rate: %s/%s' % (success_count, len(checkers)))
-    return success_count
-
-
-class TwitterAccessChecker(threading.Thread):
-    def __init__(self):
-        super(TwitterAccessChecker, self).__init__()
-        self.success = False
-
-    def run(self):
-        try:
-            urllib2.urlopen('https://www.twitter.com', timeout=10).read()
-            self.success = True
-        except:
-            pass
-
-
 def handle_nfqueue():
     try:
         nfqueue = NetfilterQueue()
@@ -234,6 +253,8 @@ def handle_nfqueue():
         nfqueue.run()
     except:
         LOGGER.exception('stopped handling nfqueue')
+    finally:
+        LOGGER.info('full proxy service stopped')
 
 
 def handle_packet(nfqueue_element):
@@ -338,7 +359,7 @@ def create_conntrack_entry(src, sport, dst, dport, local_port):
             try:
                 conntrack_entry.create()
             except:
-                LOGGER.warn('failed to create nat conntrack entry for %s:%s => %s:%s' % (src, sport, dst, dport))
+                LOGGER.exception('failed to create nat conntrack entry for %s:%s => %s:%s' % (src, sport, dst, dport))
         finally:
             del conntrack_entry
     finally:
@@ -347,6 +368,7 @@ def create_conntrack_entry(src, sport, dst, dport, local_port):
 
 def delete_existing_conntrack_entry(ip):
     try:
+        LOGGER.info('delete existing conntrack entry for: %s' % ip)
         output = subprocess.check_output(
             ['/data/data/fq.router/proxy-tools/conntrack', '-D', '-p', 'tcp', '--reply-src', ip],
             stderr=subprocess.STDOUT).strip()
@@ -361,6 +383,3 @@ def add_to_white_list(ip):
         LOGGER.info('add white list ip: %s' % ip)
         white_list.add(ip)
     pending_list.pop(ip, None)
-
-
-dns_resolver.on_blacklist_ip_resolved = add_to_black_list
